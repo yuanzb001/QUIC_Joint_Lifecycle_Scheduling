@@ -135,7 +135,7 @@ void ClientBridgeApp::ReceiveFromNs3(ns3::Ptr<ns3::Socket> socket) {
         }
 
         rx_packets_++; // [ADDED] Increment leave ns-3 packet count
-        if (rx_packets_ % 500 == 0 || rx_packets_ > 7000){
+        if (rx_packets_ % 1000 == 0){
             std::cout << "[ClientBridge " << my_listen_port_ << "] Realtime - Tx: " << tx_packets_ 
                       << " | Rx: " << rx_packets_ << std::endl;
         }

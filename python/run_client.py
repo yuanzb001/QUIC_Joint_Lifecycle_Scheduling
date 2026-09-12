@@ -13,12 +13,13 @@ import vvc_splitter
 
 csv_lock = threading.Lock()
 
-def stats_timer_thread(conn, network_csv, interval, stop_event, video_id, gop_index, trace_name, trace_start_index, start_time, seq_counters):
+def stats_timer_thread(conn, network_csv, interval, stop_event, video_id, trace_name, trace_start_index, start_time, seq_counters):
     """Periodically fetches network stats in timer mode."""
     while not stop_event.is_set():
         stats = conn._client.get_network_stats()
         with csv_lock:
             seq_counters['network'] += 1
+            gop_index = seq_counters.get('gop', 0)
             match_time = time.time() - start_time
             network_csv.writerow([
                 seq_counters['network'],
@@ -38,7 +39,7 @@ def stats_timer_thread(conn, network_csv, interval, stop_event, video_id, gop_in
             ])
         stop_event.wait(interval)
 
-def send_file_thread(conn, filepath, priority, sender_csv, network_csv, stats_mode, video_id, gop_index, trace_name, trace_start_index, start_time, seq_counters):
+def send_file_thread(conn, filepath, priority, sender_csv, network_csv, stats_mode, video_id, trace_name, trace_start_index, start_time, seq_counters):
     """
     Reads a file and sends it over a single QUIC stream in chunks.
     """
@@ -62,10 +63,17 @@ def send_file_thread(conn, filepath, priority, sender_csv, network_csv, stats_mo
         nal_type = nalu["type"]
         
         # 7: IDR_W_RADL, 8: IDR_N_LP, 9: CRA_NUT
-        if stats_mode == "iframe" and nal_type in [7, 8, 9] and file_type == "subpic_0.vvc":
+        is_iframe = (nal_type in [7, 8, 9])
+        
+        if file_type == "subpic_0.vvc" and is_iframe:
+            with csv_lock:
+                seq_counters['gop'] += 1
+
+        if stats_mode == "iframe" and file_type == "subpic_0.vvc" and is_iframe:
             stats = conn._client.get_network_stats()
             with csv_lock:
                 seq_counters['network'] += 1
+                gop_index = seq_counters.get('gop', 0)
                 match_time = time.time() - start_time
                 network_csv.writerow([
                     seq_counters['network'],
@@ -88,6 +96,7 @@ def send_file_thread(conn, filepath, priority, sender_csv, network_csv, stats_mo
         
         with csv_lock:
             seq_counters['sender'] += 1
+            gop_index = seq_counters.get('gop', 0)
             match_time_sender = time.time() - start_time
             sender_csv.writerow([
                 seq_counters['sender'],
@@ -110,7 +119,7 @@ def send_file_thread(conn, filepath, priority, sender_csv, network_csv, stats_mo
     stream.close()
     print(f"[Client] ✅ Finished sending {file_type} (Stream {stream_id}). Sent {frame_id} NALUs.")
 
-def process_video(conn, filepath, sender_csv, network_csv, stats_mode, stats_interval, video_id, gop_index, trace_name, trace_start_index, start_time, seq_counters):
+def process_video(conn, filepath, sender_csv, network_csv, stats_mode, stats_interval, video_id, trace_name, trace_start_index, start_time, seq_counters):
     print(f"\n=== Processing Video: {filepath} ===")
     output_dir = "split_temp_dir"
     split_files = vvc_splitter.split(filepath, output_dir, num_subpics=4)
@@ -119,18 +128,18 @@ def process_video(conn, filepath, sender_csv, network_csv, stats_mode, stats_int
     stop_event = threading.Event()
     stats_thread = None
     if stats_mode == "timer":
-        stats_thread = threading.Thread(target=stats_timer_thread, args=(conn, network_csv, stats_interval, stop_event, video_id, gop_index, trace_name, trace_start_index, start_time, seq_counters))
+        stats_thread = threading.Thread(target=stats_timer_thread, args=(conn, network_csv, stats_interval, stop_event, video_id, trace_name, trace_start_index, start_time, seq_counters))
         stats_thread.start()
 
     threads = []
     
     # common.vvc
-    t_common = threading.Thread(target=send_file_thread, args=(conn, split_files['common'], 100, sender_csv, network_csv, stats_mode, video_id, gop_index, trace_name, trace_start_index, start_time, seq_counters))
+    t_common = threading.Thread(target=send_file_thread, args=(conn, split_files['common'], 100, sender_csv, network_csv, stats_mode, video_id, trace_name, trace_start_index, start_time, seq_counters))
     threads.append(t_common)
     
     priorities = [80, 60, 40, 20]
     for i in range(4):
-        t = threading.Thread(target=send_file_thread, args=(conn, split_files['subpics'][i], priorities[i], sender_csv, network_csv, stats_mode, video_id, gop_index, trace_name, trace_start_index, start_time, seq_counters))
+        t = threading.Thread(target=send_file_thread, args=(conn, split_files['subpics'][i], priorities[i], sender_csv, network_csv, stats_mode, video_id, trace_name, trace_start_index, start_time, seq_counters))
         threads.append(t)
     
     for t in threads:
@@ -149,11 +158,13 @@ def main():
     parser.add_argument("--host", type=str, default="127.0.0.1", help="Target server host address")
     parser.add_argument("--port", type=int, default=4433, help="Target server port")
     parser.add_argument("--file", type=str, default="", help="Single VVC file to send")
-    parser.add_argument("--input_dir", type=str, default="/home/kopn/streaming_pre/vvc_subpic_outputs", help="Directory of VVC files to send")
+    default_input_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../streaming_pre/vvc_subpic_outputs"))
+    parser.add_argument("--input_dir", type=str, default=default_input_dir, help="Directory of VVC files to send")
     parser.add_argument("--stats_timer", type=float, nargs='?', const=1.0, default=None, help="Enable timer mode for stats. Optionally specify interval in seconds (default 1.0). If omitted, uses iframe mode.")
     parser.add_argument("--trace_name", type=str, default="unknown_trace", help="Name of the trace file for logging purposes")
     parser.add_argument("--single_conn", action="store_true", help="Use a single QUIC connection for all videos")
     parser.add_argument("--flooding", nargs="?", const=30, type=int, default=False, help="Send continuous dummy data. Optionally specify duration in seconds (default 30).")
+    parser.add_argument("--loop", type=int, default=1, help="Number of times to loop the video sending (0 for infinite)")
     args = parser.parse_args()
 
     stats_mode = "timer" if args.stats_timer is not None else "iframe"
@@ -197,7 +208,7 @@ def main():
     network_csv = csv.writer(network_log_file)
     network_csv.writerow(["seq_num", "video_id", "gop_index", "trace_name", "trace_start_index", "start_time", "match_time", "rtt_us", "cwnd_bytes", "total_bytes_sent", "estimated_bandwidth_bps", "bytes_in_flight", "posted_bytes", "ideal_bytes"])
 
-    seq_counters = {'network': 0, 'sender': 0}
+    seq_counters = {'network': 0, 'sender': 0, 'gop': 0}
 
     if args.flooding is not False:
         duration = args.flooding
@@ -209,19 +220,25 @@ def main():
         stats_stop_event = threading.Event()
         stats_thread = None
         if stats_mode == "timer":
-            stats_thread = threading.Thread(target=stats_timer_thread, args=(conn, network_csv, stats_interval, stats_stop_event, "flooding", 0, args.trace_name, trace_start_index, start_time, seq_counters))
+            stats_thread = threading.Thread(target=stats_timer_thread, args=(conn, network_csv, stats_interval, stats_stop_event, "flooding", args.trace_name, trace_start_index, start_time, seq_counters))
             stats_thread.start()
             
         stream = conn.open_stream()
-        dummy_data = b'A' * (1024 * 1024) # 1MB chunks to easily saturate 1Gbps
+        dummy_data = b'A' * (128 * 1024) # 128KB chunks
         
         print(f"[Flooding] Started sending data on Stream {stream.stream_id}...")
         test_start = time.time()
         try:
             while time.time() - test_start < duration:
+                stats = conn._client.get_network_stats()
+                # Limit outstanding un-transmitted data to ~4MB to prevent OOM
+                if stream.bytes_sent - stats.bytes_sent > 4 * 1024 * 1024:
+                    time.sleep(0.02)
+                    continue
+                    
                 stream.send_data(frame_id=0, data=dummy_data)
-                # extremely small sleep just to prevent CPU 100% lockup
-                time.sleep(0.001) 
+                # Small sleep to prevent CPU hogging
+                time.sleep(0.001)
         except KeyboardInterrupt:
             print("\n[Flooding] Interrupted by user.")
             
@@ -242,24 +259,30 @@ def main():
         conn._client.set_ack_callback(lambda e: None)
         conn._client.configure_mtu(1200, 1500)
 
-    for gop_index, filepath in enumerate(files_to_process, start=1):
-        video_id = os.path.splitext(os.path.basename(filepath))[0]
-        
-        if args.single_conn:
-            print(f"\n=== Processing {video_id} (GOP {gop_index}) over existing connection ===")
-        else:
-            print(f"\n=== Starting QUIC Connection for {video_id} (GOP {gop_index}) ===")
-            conn = QuicConnection(host=args.host, port=args.port, scheduling_scheme=1)
-            conn._client.set_ack_callback(lambda e: None)
-            conn._client.configure_mtu(1200, 1500)
-        
-        process_video(conn, filepath, sender_csv, network_csv, stats_mode, stats_interval, video_id, gop_index, args.trace_name, trace_start_index, start_time, seq_counters)
-        
-        time.sleep(2) # Wait for ACKs
-        
-        if not args.single_conn:
-            conn.disconnect(force=True)
-            time.sleep(1) # Grace period between videos
+    loop_count = 0
+    while True:
+        loop_count += 1
+        if args.loop > 0 and loop_count > args.loop:
+            break
+        print(f"\n=== Starting Video Loop Round {loop_count} ===")
+        for filepath in files_to_process:
+            video_id = os.path.splitext(os.path.basename(filepath))[0]
+            
+            if args.single_conn:
+                print(f"\n=== Processing {video_id} over existing connection ===")
+            else:
+                print(f"\n=== Starting QUIC Connection for {video_id} ===")
+                conn = QuicConnection(host=args.host, port=args.port, scheduling_scheme=1)
+                conn._client.set_ack_callback(lambda e: None)
+                conn._client.configure_mtu(1200, 1500)
+            
+            process_video(conn, filepath, sender_csv, network_csv, stats_mode, stats_interval, video_id, args.trace_name, trace_start_index, start_time, seq_counters)
+            
+            time.sleep(2) # Wait for ACKs
+            
+            if not args.single_conn:
+                conn.disconnect(force=True)
+                time.sleep(1) # Grace period between videos
 
     if args.single_conn:
         conn.disconnect(force=True)

@@ -150,6 +150,7 @@ int main(int argc, char *argv[])
     std::string traceFile = "";
     std::string traceUnit = "Mbps";
     bool randomStart = true;
+    double simTime = 200.0;
 
     CommandLine cmd;
     cmd.AddValue("errorRate", "Packet loss rate", errorRate);
@@ -159,6 +160,7 @@ int main(int argc, char *argv[])
     cmd.AddValue("traceFile", "Path to bandwidth trace file", traceFile);
     cmd.AddValue("traceUnit", "Unit for bandwidth in trace file (e.g., Mbps, Kbps)", traceUnit);
     cmd.AddValue("randomStart", "Randomly choose start point in trace", randomStart);
+    cmd.AddValue("simTime", "Total simulation time (seconds)", simTime);
     cmd.Parse(argc, argv);
 
     NodeContainer hosts;
@@ -249,14 +251,14 @@ int main(int argc, char *argv[])
         serverApp->Setup(server_virtual_port, server_port);
         hosts.Get(1)->AddApplication(serverApp);
         serverApp->SetStartTime(Seconds(1.0));
-        serverApp->SetStopTime(Seconds(600.0));
+        serverApp->SetStopTime(Seconds(simTime + 10.0));
 
         // Install ClientBridge on Host0 (H1)
         Ptr<ClientBridgeApp> clientApp = CreateObject<ClientBridgeApp>();
         clientApp->Setup(client_port, client_virtual_port, i3.GetAddress(1), server_virtual_port);
         hosts.Get(0)->AddApplication(clientApp);
         clientApp->SetStartTime(Seconds(1.0));
-        clientApp->SetStopTime(Seconds(600.0));
+        clientApp->SetStopTime(Seconds(simTime + 10.0));
     }
 
     FlowMonitorHelper flowmon;
@@ -273,7 +275,7 @@ int main(int argc, char *argv[])
         sync_file << g_startIndex << "\n";
     }
 
-    Simulator::Stop(Seconds(200.0));
+    Simulator::Stop(Seconds(simTime));
     Simulator::Run();
 
     monitor->CheckForLostPackets();

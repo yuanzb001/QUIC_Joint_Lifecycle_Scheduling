@@ -58,7 +58,7 @@ void ServerBridgeApp::ReceiveFromNs3(ns3::Ptr<ns3::Socket> socket) {
     ns3::Address from;
     while ((packet = socket->RecvFrom(from))) {
         rx_packets_++; // [ADDED] Increment leave ns-3 packet count
-        if (rx_packets_ % 500 == 0) {
+        if (rx_packets_ % 1000 == 0) {
             std::cout << "[ServerBridge " << target_server_port_ << "] Realtime - Tx: " << tx_packets_ 
                       << " | Rx: " << rx_packets_ << std::endl;
         }
@@ -132,7 +132,7 @@ void ServerBridgeApp::ServerRecvLoop(int fd, ns3::Address tx_bridge_addr) {
         ssize_t bytes = recv(fd, buffer, sizeof(buffer), 0);
         if (bytes > 0) {
             tx_packets_++; // [ADDED] Increment enter ns-3 packet count
-            if (tx_packets_ % 500 == 0 || tx_packets_ > 7000) {
+            if (tx_packets_ % 1000 == 0) {
                 std::cout << "[ServerBridge " << target_server_port_ << "] Realtime - Tx: " << tx_packets_ 
                           << " | Rx: " << rx_packets_ << std::endl;
             }

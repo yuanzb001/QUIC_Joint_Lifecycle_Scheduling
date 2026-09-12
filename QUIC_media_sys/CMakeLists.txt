@@ -88,7 +88,7 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(pybind11)
 
 pybind11_add_module(quic_media
-    python/quic_media_py.cpp
+    ../python/quic_media_py.cpp
     src/api/quic_media_client.cpp
     src/api/quic_media_server.cpp
 )
@@ -103,7 +103,7 @@ target_link_libraries(quic_media PRIVATE
 
 # Post-build copy to python directory
 add_custom_command(TARGET quic_media POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_SOURCE_DIR}/python/lib
-    COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:quic_media> ${CMAKE_SOURCE_DIR}/python/lib/
-    COMMAND ${CMAKE_COMMAND} -E copy ${MSQUIC_LIB}/libmsquic.so ${CMAKE_SOURCE_DIR}/python/lib/
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_SOURCE_DIR}/../python/lib
+    COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:quic_media> ${CMAKE_SOURCE_DIR}/../python/lib/
+    COMMAND ${CMAKE_COMMAND} -E copy ${MSQUIC_LIB}/libmsquic.so ${CMAKE_SOURCE_DIR}/../python/lib/
 )

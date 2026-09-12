@@ -5,7 +5,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), 'lib')))
 import vvc_splitter
 
 if __name__ == "__main__":
-    input_vvc = "/home/kopn/VVCSoftware_VTM/experiments/subpic_official/official_2subpic.vvc"
+    input_vvc = os.path.abspath(os.path.join(os.path.dirname(__file__), "../VVCSoftware_VTM/experiments/subpic_official/official_2subpic.vvc"))
     output_dir = "subpic_split_test"
     
     print("Testing vvc_splitter.split()...")

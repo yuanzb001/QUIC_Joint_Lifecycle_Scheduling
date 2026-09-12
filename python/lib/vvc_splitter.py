@@ -2,7 +2,7 @@ import json
 import subprocess
 from pathlib import Path
 
-VTM_BIN = Path("/home/kopn/VVCSoftware_VTM/bin")
+VTM_BIN = Path(__file__).resolve().parent.parent.parent / "VVCSoftware_VTM" / "bin"
 EXTRACTOR = VTM_BIN / "BitstreamExtractorAppStatic"
 
 NAL_NAMES = {

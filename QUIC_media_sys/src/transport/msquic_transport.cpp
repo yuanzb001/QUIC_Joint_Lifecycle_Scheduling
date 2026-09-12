@@ -25,7 +25,7 @@ namespace moq::transport {
 
 // A single ALPN for MoQ prototype
 static constexpr const char* kAlpn = "moq";
-static constexpr uint16_t kDefaultIdleTimeoutMs = 30000;
+static constexpr uint64_t kDefaultIdleTimeoutMs = 300000;
 
 // ------------------- Helpers -------------------
 
@@ -166,8 +166,11 @@ bool MsQuicTransport::init_configuration_client() {
     settings.IsSet.IdleTimeoutMs = TRUE;
     settings.IdleTimeoutMs = kDefaultIdleTimeoutMs;
 
-    settings.IsSet.CongestionControlAlgorithm = TRUE;
-    settings.CongestionControlAlgorithm = QUIC_CONGESTION_CONTROL_ALGORITHM_BBR;
+    settings.IsSet.DisconnectTimeoutMs = TRUE;
+    settings.DisconnectTimeoutMs = kDefaultIdleTimeoutMs;
+
+    // settings.IsSet.CongestionControlAlgorithm = TRUE;
+    // settings.CongestionControlAlgorithm = QUIC_CONGESTION_CONTROL_ALGORITHM_BBR;
 
     if (cfg_.max_mtu > 0) {
         settings.IsSet.MaximumMtu = TRUE;
@@ -229,8 +232,11 @@ bool MsQuicTransport::init_configuration_server() {
     settings.IsSet.IdleTimeoutMs = TRUE;
     settings.IdleTimeoutMs = 300000; // 5 min
 
-    settings.IsSet.CongestionControlAlgorithm = TRUE;
-    settings.CongestionControlAlgorithm = QUIC_CONGESTION_CONTROL_ALGORITHM_BBR;
+    settings.IsSet.DisconnectTimeoutMs = TRUE;
+    settings.DisconnectTimeoutMs = 300000; // 5 min
+
+    // settings.IsSet.CongestionControlAlgorithm = TRUE;
+    // settings.CongestionControlAlgorithm = QUIC_CONGESTION_CONTROL_ALGORITHM_BBR;
 
     // Allow multiple peer streams (server side)
     settings.IsSet.PeerBidiStreamCount = TRUE;
@@ -248,7 +254,7 @@ bool MsQuicTransport::init_configuration_server() {
 
     // Keepalive (0 = disabled in many versions)
     settings.IsSet.KeepAliveIntervalMs = TRUE;
-    settings.KeepAliveIntervalMs = 0;
+    settings.KeepAliveIntervalMs = 10000;
 
     if (cfg_.max_mtu > 0) {
         settings.IsSet.MaximumMtu = TRUE;
