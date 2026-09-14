@@ -1,0 +1,2 @@
+/usr/bin/ar qc /home/yuanzn/Documents/QUIC_Joint_Lifecycle_Scheduling/VVCSoftware_VTM/lib/umake/gcc-13.3/x86_64/release/libUtilities.a CMakeFiles/Utilities.dir/VideoIOYuv.cpp.o CMakeFiles/Utilities.dir/program_options_lite.cpp.o
+/usr/bin/ranlib /home/yuanzn/Documents/QUIC_Joint_Lifecycle_Scheduling/VVCSoftware_VTM/lib/umake/gcc-13.3/x86_64/release/libUtilities.a
