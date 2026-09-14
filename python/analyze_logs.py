@@ -3,9 +3,10 @@ from collections import Counter
 import os
 
 try:
-    sender = list(csv.DictReader(open('sender_log.csv')))
-    receiver = list(csv.DictReader(open('receiver_log.csv')))
-    network = list(csv.DictReader(open('network_log.csv')))
+    log_dir = "logs"
+    sender = list(csv.DictReader(open(os.path.join(log_dir, 'sender_log.csv'))))
+    receiver = list(csv.DictReader(open(os.path.join(log_dir, 'receiver_log.csv'))))
+    network = list(csv.DictReader(open(os.path.join(log_dir, 'network_log.csv'))))
 
     print("📊 QUIC Media Transmission Report 📊")
     print("=" * 40)

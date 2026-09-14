@@ -42,7 +42,9 @@ def main():
         
     # Setup CSV Logging for Receiver Timestamps
     global csv_file, csv_writer, packet_counter
-    csv_file = open("receiver_log.csv", "w", newline="")
+    log_dir = "logs"
+    os.makedirs(log_dir, exist_ok=True)
+    csv_file = open(os.path.join(log_dir, "receiver_log.csv"), "w", newline="")
     csv_writer = csv.writer(csv_file)
     csv_writer.writerow(["receive_time_ns", "stream_id", "packet_seq", "bytes_received"])
     

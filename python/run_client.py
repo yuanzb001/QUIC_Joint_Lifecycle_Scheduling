@@ -200,11 +200,14 @@ def main():
         
     start_time = ns3_start_time
 
-    sender_log_file = open("sender_log.csv", "w", newline="")
+    log_dir = "logs"
+    os.makedirs(log_dir, exist_ok=True)
+
+    sender_log_file = open(os.path.join(log_dir, "sender_log.csv"), "w", newline="")
     sender_csv = csv.writer(sender_log_file)
     sender_csv.writerow(["seq_num", "video_id", "gop_index", "trace_name", "trace_start_index", "start_time", "match_time", "stream_id", "file_type", "frame_id", "bytes_sent"])
     
-    network_log_file = open("network_log.csv", "w", newline="")
+    network_log_file = open(os.path.join(log_dir, "network_log.csv"), "w", newline="")
     network_csv = csv.writer(network_log_file)
     network_csv.writerow(["seq_num", "video_id", "gop_index", "trace_name", "trace_start_index", "start_time", "match_time", "rtt_us", "cwnd_bytes", "total_bytes_sent", "estimated_bandwidth_bps", "bytes_in_flight", "posted_bytes", "ideal_bytes"])
 
