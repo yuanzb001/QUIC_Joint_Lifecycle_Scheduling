@@ -158,8 +158,8 @@ def encode_video(name, info):
     # Automatically detect all frames
     # --------------------------------------------------------
 
-    # frames = get_frame_count(input_file)
-    frames = 50
+    frames = get_frame_count(input_file)
+    # frames = 50
     fps = info["fps"]
     duration = frames / fps
 
@@ -170,9 +170,9 @@ def encode_video(name, info):
     video_dir = OUTPUT_DIR / name
     video_dir.mkdir(parents=True, exist_ok=True)
 
-    bitstream = video_dir / f"{name}_QP{QP}_50frames_2x2.vvc"
-    cfg = video_dir / f"{name}_QP{QP}_50frames_2x2.cfg"
-    log = video_dir / f"{name}_QP{QP}_50frames_2x2.log"
+    bitstream = video_dir / f"{name}_QP{QP}_2x2.vvc"
+    cfg = video_dir / f"{name}_QP{QP}_2x2.cfg"
+    log = video_dir / f"{name}_QP{QP}_2x2.log"
 
     # --------------------------------------------------------
     # Generate VTM configuration
@@ -319,7 +319,7 @@ def main():
 
             if result:
                 results.append(result)
-            break
+            # break
 
         except Exception as e:
             print(f"\n[ERROR] {name}: {e}")
