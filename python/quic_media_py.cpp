@@ -73,17 +73,39 @@ PYBIND11_MODULE(quic_media, m) {
                 cb(event);
             });
         })
+
+        // Raw stream byte input
+        .def("send_raw",
+            [](QuicMediaClient& self, uint32_t stream_id, py::buffer data, bool is_fin, bool delay_send) {
+                py::buffer_info info = data.request();
+        
+                if (info.size <= 0 || info.ptr == nullptr)
+                    return false;
+        
+                py::gil_scoped_release release;
+                return self.send_raw(
+                    stream_id,
+                    static_cast<const uint8_t*>(info.ptr),
+                    static_cast<size_t>(info.size * info.itemsize),
+                    is_fin,
+                    delay_send
+                );
+            },
+            py::arg("stream_id"),
+            py::arg("data"),
+            py::arg("is_fin") = false,
+            py::arg("delay_send") = false)
              
         // Media object input
         .def("enqueue_object", 
-            [](QuicMediaClient& self, uint32_t stream_id, uint32_t frame_id, uint16_t subpic_id, uint16_t object_type, py::buffer data, uint16_t priority, bool is_fin) {
+            [](QuicMediaClient& self, uint32_t stream_id, uint32_t frame_id, uint16_t subpic_id, uint16_t object_type, py::buffer data, uint16_t priority, bool is_fin, bool delay_send) {
                 py::buffer_info info = data.request();
                 
                 // Release GIL before calling C++ sending logic
                 py::gil_scoped_release release;
-                return self.enqueue_object(stream_id, frame_id, subpic_id, object_type, static_cast<const uint8_t*>(info.ptr), info.size * info.itemsize, priority, is_fin);
+                return self.enqueue_object(stream_id, frame_id, subpic_id, object_type, static_cast<const uint8_t*>(info.ptr), info.size * info.itemsize, priority, is_fin, delay_send);
             },
-            py::arg("stream_id"), py::arg("frame_id"), py::arg("subpic_id"), py::arg("object_type"), py::arg("data"), py::arg("priority") = 0, py::arg("is_fin") = false);
+            py::arg("stream_id"), py::arg("frame_id"), py::arg("subpic_id"), py::arg("object_type"), py::arg("data"), py::arg("priority") = 0, py::arg("is_fin") = false, py::arg("delay_send") = false);
 
     py::class_<QuicMediaServer>(m, "QuicMediaServer")
         .def(py::init<>())
@@ -100,10 +122,22 @@ PYBIND11_MODULE(quic_media, m) {
             if (cb.is_none()) {
                 self.set_recv_callback(nullptr);
             } else {
-                self.set_recv_callback([cb](uint32_t stream_id, const uint8_t* data, size_t len) {
+                self.set_recv_callback([cb](uint32_t stream_id, const moq::PacketHeader& hdr, const uint8_t* data, size_t len) {
                     py::gil_scoped_acquire acquire;
-                    cb(stream_id, py::bytes(reinterpret_cast<const char*>(data), len));
+                    cb(stream_id, hdr.nalu_id, hdr.subpic_id, hdr.flags, hdr.fragment_idx, hdr.fragment_count, py::bytes(reinterpret_cast<const char*>(data), len));
                 });
+            }
+        })
+        .def("set_stream_close_callback", [](QuicMediaServer& self, py::object cb) {
+            if (cb.is_none()) {
+                self.set_stream_close_callback(nullptr);
+            } else {
+                self.set_stream_close_callback(
+                    [cb](uint32_t stream_id) {
+                        py::gil_scoped_acquire acquire;
+                        cb(stream_id);
+                    }
+                );
             }
         });
 }

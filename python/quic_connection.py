@@ -4,19 +4,20 @@ import datetime
 import quic_media
 
 class QuicStream:
-    def __init__(self, client, stream_id):
+    def __init__(self, client, stream_id, priority=0):
         self._client = client
         self.stream_id = stream_id
         self.is_active = True
+        self.priority = int(priority)
         self.frames_sent = 0
         self.bytes_sent = 0
 
-    def send_data(self, frame_id, subpic_id=0, obj_type=1, data=b"", priority=0, is_fin=False):
+    def send_data(self, frame_id, subpic_id=0, obj_type=1, data=b"", priority=0, is_fin=False, delay_send=False):
         if not self.is_active:
             return False
         
         obj_id = self._client.enqueue_object(
-            self.stream_id, frame_id, subpic_id, obj_type, data, priority, is_fin
+            self.stream_id, frame_id, subpic_id, obj_type, data, priority, is_fin, delay_send
         )
         # Check if obj_id is not the failure value (uint64_t -1)
         success = (obj_id != 18446744073709551615 and obj_id != -1)
@@ -24,6 +25,49 @@ class QuicStream:
             self.frames_sent += 1
             self.bytes_sent += len(data)
         return success
+
+    def send_chunk(self, data, is_fin=False, delay_send=False):
+        if not self.is_active or not data:
+            return False
+    
+        success = self._client.send_raw(
+            self.stream_id,
+            data,
+            is_fin,
+            delay_send
+        )
+    
+        if success:
+            self.bytes_sent += len(data)
+    
+        return success
+    
+    def set_priority(self, priority):
+        """Dynamically update QUIC stream priority."""
+        if not self.is_active:
+            return False
+
+        priority = int(priority)
+
+        if priority < 0 or priority > 65535:
+            raise ValueError(
+                f"priority must be in [0, 65535], got {priority}"
+            )
+
+        success = self._client.set_stream_priority(
+            self.stream_id,
+            priority
+        )
+
+        if success:
+            self.priority = priority
+
+            print(
+                f"[Stream {self.stream_id}] "
+                f"priority -> {priority}"
+            )
+
+        return bool(success)
 
     def close(self):
         """Graceful close"""
@@ -73,10 +117,33 @@ class QuicConnection:
 
         self._client.disconnect(force=force)
 
-    def open_stream(self):
+    def open_stream(self, priority=0):
         stream_id = self._client.open_stream()
-        stream = QuicStream(self._client, stream_id)
+    
+        if stream_id is None or int(stream_id) < 0:
+            raise RuntimeError("Failed to open QUIC stream")
+    
+        stream = QuicStream(
+            self._client,
+            stream_id,
+            priority=priority
+        )
+    
+        # Apply initial priority immediately after stream creation.
+        if not stream.set_priority(priority):
+            stream.close()
+            raise RuntimeError(
+                f"Failed to set priority={priority} "
+                f"for stream={stream_id}"
+            )
+    
         self.streams.append(stream)
+    
+        print(
+            f"[Connection] Opened stream={stream.stream_id} "
+            f"priority={priority}"
+        )
+    
         return stream
 
     def _auto_send_task(self, stream, count, delay, payload_size):
