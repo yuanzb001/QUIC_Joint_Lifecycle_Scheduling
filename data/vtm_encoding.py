@@ -27,7 +27,7 @@ INPUT_DIR = Path(
 
 OUTPUT_DIR = Path(
     "/home/yuanzn/Documents/QUIC_Joint_Lifecycle_Scheduling/"
-    "data/vvc_bitstream/HEVC_CTC_classB/VVC_2x2"
+    "data/vvc_bitstream/HEVC_CTC_classB/VVC_4x4"
 )
 
 WIDTH = 1920
@@ -80,7 +80,7 @@ def get_frame_count(path):
 
 
 # ============================================================
-# VTM 2x2 Subpicture Configuration
+# VTM 4x4 Subpicture Configuration
 # ============================================================
 
 def make_subpic_cfg(fps, frames, input_file, bitstream):
@@ -103,42 +103,43 @@ BitstreamFile                 : {bitstream}
 QP                            : {QP}
 
 # ============================================================
-# 2x2 Subpictures
+# 4x4 Subpictures
 # 1920x1080, CTU=128 -> 15x9 CTUs
 # ============================================================
 
-SubPicInfoPresentFlag                   : 1
-NumSubPics                              : 4
-SubPicSameSizeFlag                      : 0
+SubPicInfoPresentFlag                  : 1
+NumSubPics                             : 16
+SubPicSameSizeFlag                     : 0
 
-SubPicCtuTopLeftX                       : 0 7 0 7
-SubPicCtuTopLeftY                       : 0 0 4 4
-SubPicWidth                             : 7 8 7 8
-SubPicHeight                            : 4 4 5 5
+SubPicCtuTopLeftX                      : 0 4 8 12 0 4 8 12 0 4 8 12 0 4 8 12
+SubPicCtuTopLeftY                      : 0 0 0 0 2 2 2 2 4 4 4 4 6 6 6 6
 
-SubPicTreatedAsPicFlag                  : 1 1 1 1
-LoopFilterAcrossSubpicEnabledFlag       : 0 0 0 0
+SubPicWidth                            : 4 4 4 3 4 4 4 3 4 4 4 3 4 4 4 3
+SubPicHeight                           : 2 2 2 2 2 2 2 2 2 2 2 2 3 3 3 3
 
-SubPicIdMappingExplicitlySignalledFlag  : 0
+SubPicTreatedAsPicFlag                 : 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1
+LoopFilterAcrossSubpicEnabledFlag       : 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+
+SubPicIdMappingExplicitlySignalledFlag : 0
 SubPicIdMappingInSpsFlag                : 0
 SubPicIdLen                             : 0
-SubPicId                                : 0
+SubPicId                                : 0 
 
 # ============================================================
-# 2x2 Tiles / 4 rectangular slices
+# 4x4 Tiles / 16 rectangular slices
 # ============================================================
 
-EnablePicPartitioning                   : 1
+EnablePicPartitioning                  : 1
 
-TileColumnWidthArray                    : 7 8
-TileRowHeightArray                      : 4 5
+TileColumnWidthArray                   : 4 4 4 3
+TileRowHeightArray                     : 2 2 2 3
 
-RasterScanSlices                        : 0
-RectSliceFixedWidth                     : 1
-RectSliceFixedHeight                    : 1
+RasterScanSlices                       : 0
+RectSliceFixedWidth                    : 1
+RectSliceFixedHeight                   : 1
 
-DisableLoopFilterAcrossTiles            : 1
-DisableLoopFilterAcrossSlices           : 1
+DisableLoopFilterAcrossTiles           : 1
+DisableLoopFilterAcrossSlices          : 1
 """
 
 
@@ -170,9 +171,9 @@ def encode_video(name, info):
     video_dir = OUTPUT_DIR / name
     video_dir.mkdir(parents=True, exist_ok=True)
 
-    bitstream = video_dir / f"{name}_QP{QP}_2x2.vvc"
-    cfg = video_dir / f"{name}_QP{QP}_2x2.cfg"
-    log = video_dir / f"{name}_QP{QP}_2x2.log"
+    bitstream = video_dir / f"{name}_QP{QP}_4x4.vvc"
+    cfg = video_dir / f"{name}_QP{QP}_4x4.cfg"
+    log = video_dir / f"{name}_QP{QP}_4x4.log"
 
     # --------------------------------------------------------
     # Generate VTM configuration
@@ -202,7 +203,7 @@ def encode_video(name, info):
     print(f"Duration : {duration:.2f} s")
     print(f"QP       : {QP}")
     print(f"Mode     : Low Delay P")
-    print(f"Subpics  : 2x2")
+    print(f"Subpics  : 4x4")
     print("=" * 70)
 
     # --------------------------------------------------------
@@ -332,7 +333,7 @@ def main():
         print("\nNo successful encodes.")
         return
 
-    csv_file = OUTPUT_DIR / f"summary_QP{QP}_2x2.csv"
+    csv_file = OUTPUT_DIR / f"summary_QP{QP}_4x4.csv"
 
     with csv_file.open("w", newline="") as f:
 
