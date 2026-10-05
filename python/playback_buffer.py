@@ -4,88 +4,84 @@ from collections import defaultdict
 
 
 class PlaybackBuffer:
-    def __init__(self, fps=30.0):
+
+    def __init__(self, fps=30.0, playback_delay_ms=500.0):
         self.fps = float(fps)
 
         if self.fps <= 0:
-            raise ValueError(
-                f"Invalid FPS={self.fps}"
-            )
+            raise ValueError(f"Invalid FPS={self.fps}")
 
-        self.frame_interval_ns = int(
-            1e9 / self.fps
-        )
+        self.playback_delay_ms = float(playback_delay_ms)
+        self.playback_delay_ns = int(self.playback_delay_ms * 1e6)
 
-        # ----------------------------------------------------
-        # frame_id
-        #   -> subpic_id
-        #       -> fragment_idx
-        #           -> fragment info
-        # ----------------------------------------------------
-        self.frames = defaultdict(
-            lambda: defaultdict(dict)
-        )
+        self.frame_interval_ns = int(1e9 / self.fps)
 
-        # Next frame expected by playback.
+        # frame_id -> subpic_id -> fragment_idx -> fragment info
+        self.frames = defaultdict(lambda: defaultdict(dict))
+
         self.next_frame = 0
 
-        # Playback state.
-        #
-        # Before started:
-        #   wait until frame 0 has all active SPs.
-        #
-        # After started:
-        #   consume according to FPS.
         self.started = False
+        self.waiting_for_frame = False
 
-        # Scheduled playback time for next_frame.
-        self.next_play_ns = None
-
-        # Actual time playback started.
+        self.first_receive_ns = None
         self.playback_start_ns = None
+        self.next_play_ns = None
 
         self.lock = threading.Lock()
 
     # ========================================================
-    # FPS
+    # FPS / startup configuration
     # ========================================================
 
     def set_fps(self, fps):
-        """
-        Update playback FPS from sender INIT information.
-
-        This should normally be called before playback starts.
-        """
-
         fps = float(fps)
 
         if fps <= 0:
-            raise ValueError(
-                f"Invalid FPS={fps}"
-            )
+            raise ValueError(f"Invalid FPS={fps}")
 
         with self.lock:
-
             if self.started:
                 raise RuntimeError(
                     "Cannot change FPS after playback started"
                 )
 
             self.fps = fps
-
-            self.frame_interval_ns = int(
-                1e9 / self.fps
-            )
+            self.frame_interval_ns = int(1e9 / self.fps)
 
         print(
             f"[PlaybackBuffer] "
             f"FPS={self.fps:.3f} | "
-            f"interval="
-            f"{self.frame_interval_ns / 1e6:.3f} ms"
+            f"interval={self.frame_interval_ns / 1e6:.3f} ms | "
+            f"startup_frames={self.startup_frame_count()}"
         )
 
+    def startup_frame_count(self):
+        return max(
+            1,
+            int(round(
+                self.fps
+                * self.playback_delay_ms
+                / 1000.0
+            ))
+        )
+
+    def startup_ready(self, expected_subpics):
+        expected = set(expected_subpics)
+
+        if not expected:
+            return False
+
+        n = self.startup_frame_count()
+
+        for fid in range(n):
+            if not self.frame_ready(fid, expected):
+                return False
+
+        return True
+
     # ========================================================
-    # Push
+    # Push fragments
     # ========================================================
 
     def push(
@@ -105,7 +101,7 @@ class PlaybackBuffer:
         fragment_count = int(fragment_count)
 
         receive_ns = (
-            receive_ns
+            int(receive_ns)
             if receive_ns is not None
             else time.time_ns()
         )
@@ -113,37 +109,21 @@ class PlaybackBuffer:
         if fragment_count <= 0:
             return False
 
-        if (
-            fragment_idx < 0
-            or fragment_idx >= fragment_count
-        ):
+        if fragment_idx < 0 or fragment_idx >= fragment_count:
             return False
 
         with self.lock:
 
-            # ------------------------------------------------
-            # Playback has already moved beyond this frame.
-            #
-            # This should normally only happen for genuinely
-            # stale data after lifecycle transitions.
-            # ------------------------------------------------
             if frame_id < self.next_frame:
                 return False
 
-            parts = (
-                self.frames[frame_id][subpic_id]
-            )
+            if self.first_receive_ns is None:
+                self.first_receive_ns = receive_ns
 
-            # ------------------------------------------------
-            # Prevent fragments from an old QUIC stream and
-            # a newly reopened stream from being mixed into
-            # the same subpicture AU.
-            # ------------------------------------------------
+            parts = self.frames[frame_id][subpic_id]
+
             if parts:
-
-                existing_stream = (
-                    self._parts_stream_id(parts)
-                )
+                existing_stream = self._parts_stream_id(parts)
 
                 if (
                     existing_stream is not None
@@ -161,7 +141,7 @@ class PlaybackBuffer:
         return True
 
     # ========================================================
-    # Fragment completeness
+    # Fragment / AU state
     # ========================================================
 
     @staticmethod
@@ -182,10 +162,7 @@ class PlaybackBuffer:
         return (
             count > 0
             and len(parts) == count
-            and all(
-                i in parts
-                for i in range(count)
-            )
+            and all(i in parts for i in range(count))
         )
 
     @staticmethod
@@ -203,46 +180,124 @@ class PlaybackBuffer:
 
         return next(iter(stream_ids))
 
+    def subpic_receive_time_ns(self, frame_id, subpic_id):
+        frame_id = int(frame_id)
+        subpic_id = int(subpic_id)
+
+        with self.lock:
+            frame = self.frames.get(frame_id)
+
+            if not frame:
+                return None
+
+            parts = frame.get(subpic_id)
+
+            if not parts or not self._subpic_complete(parts):
+                return None
+
+            return max(
+                x["receive_ns"]
+                for x in parts.values()
+            )
+
     # ========================================================
     # Frame readiness
     # ========================================================
 
-    def frame_ready(
-        self,
-        frame_id,
-        expected_subpics
-    ):
+    def frame_ready(self, frame_id, expected_subpics):
         expected = set(expected_subpics)
 
         if not expected:
             return False
 
         with self.lock:
-
-            frame = self.frames.get(
-                int(frame_id)
-            )
+            frame = self.frames.get(int(frame_id))
 
             if not frame:
                 return False
 
             return all(
                 spid in frame
-                and self._subpic_complete(
-                    frame[spid]
-                )
+                and self._subpic_complete(frame[spid])
                 for spid in expected
             )
 
+    def frame_ready_time_ns(self, frame_id, expected_subpics):
+        expected = set(expected_subpics)
+
+        if not expected:
+            return None
+
+        with self.lock:
+            frame = self.frames.get(int(frame_id))
+
+            if not frame:
+                return None
+
+            ready_times = []
+
+            for spid in expected:
+                parts = frame.get(spid)
+
+                if not parts:
+                    return None
+
+                if not self._subpic_complete(parts):
+                    return None
+
+                ready_times.append(
+                    max(
+                        x["receive_ns"]
+                        for x in parts.values()
+                    )
+                )
+
+            return max(ready_times)
+
     # ========================================================
-    # Pop one frame
+    # Playback-buffer occupancy
+    # ========================================================
+
+    def playable_frames(self, expected_subpics):
+        expected = set(expected_subpics)
+
+        if not expected:
+            return 0
+
+        count = 0
+        fid = self.next_frame
+
+        while self.frame_ready(fid, expected):
+            count += 1
+            fid += 1
+
+        return count
+
+    def playable_buffer_ms(self, expected_subpics):
+        return (
+            self.playable_frames(expected_subpics)
+            / self.fps
+            * 1000.0
+        )
+
+    def occupancy(self):
+        """
+        Raw number of frame IDs currently present in memory.
+        This may include incomplete frames.
+        """
+        with self.lock:
+            return len(self.frames)
+
+    # ========================================================
+    # Pop one complete frame
     # ========================================================
 
     def pop_frame(self, frame_id):
-        with self.lock:
+        frame_id = int(frame_id)
 
+        with self.lock:
             frame = self.frames.pop(
-                int(frame_id),
+                frame_id,
                 None
             )
 
@@ -267,11 +322,9 @@ class PlaybackBuffer:
                     for x in ordered
                 ),
 
-                "stream_id":
-                    ordered[0]["stream_id"],
+                "stream_id": ordered[0]["stream_id"],
 
-                # Complete AU receive time =
-                # latest fragment receive time.
+                # SP complete receive time
                 "receive_ns": max(
                     x["receive_ns"]
                     for x in ordered
@@ -290,21 +343,13 @@ class PlaybackBuffer:
     # ========================================================
 
     def playback_due(self, now_ns=None):
-        """
-        True when playback has started and the next frame
-        should already be available for playback.
-
-        Server can use this to detect a real stall.
-        """
-
         now_ns = (
-            now_ns
+            int(now_ns)
             if now_ns is not None
             else time.time_ns()
         )
 
         with self.lock:
-
             if not self.started:
                 return False
 
@@ -313,8 +358,12 @@ class PlaybackBuffer:
 
             return now_ns >= self.next_play_ns
 
+    def current_scheduled_play_ns(self):
+        with self.lock:
+            return self.next_play_ns
+
     # ========================================================
-    # Pop next playback frame
+    # Main playback state machine
     # ========================================================
 
     def pop_next_ready(
@@ -322,159 +371,162 @@ class PlaybackBuffer:
         expected_subpics,
         now_ns=None
     ):
-        """
-        Return the next playable frame.
-
-        Startup:
-            Wait until frame 0 contains every currently
-            active subpicture. Then playback starts.
-
-        Normal playback:
-            Frames are consumed according to FPS.
-
-            If playback time arrives but one or more active
-            subpictures are missing, DO NOT advance the
-            playback cursor.
-
-            The receiver simply waits. The server can treat
-            this period as a playback stall.
-
-        Stall recovery:
-            Once the missing active subpicture(s) arrive,
-            the frame is played and the playback clock
-            resumes from the recovery time.
-        """
-
         expected = set(expected_subpics)
 
         if not expected:
             return None
 
         now_ns = (
-            now_ns
+            int(now_ns)
             if now_ns is not None
             else time.time_ns()
         )
 
         frame_id = self.next_frame
 
-        # ----------------------------------------------------
+        # ====================================================
         # STARTUP
-        # ----------------------------------------------------
+        #
+        # playback_delay_ms means playable media buffered.
+        #
+        # Example:
+        #   50 fps + 500 ms -> frames 0..24 must all be ready.
+        # ====================================================
+
         if not self.started:
 
-            # Do not start playback until the first frame
-            # contains ALL currently active SPs.
-            if not self.frame_ready(
-                frame_id,
-                expected
-            ):
+            if not self.startup_ready(expected):
                 return None
 
-            frame = self.pop_frame(
-                frame_id
+            frame_ready_ns = self.frame_ready_time_ns(
+                frame_id,
+                expected
             )
+
+            if frame_ready_ns is None:
+                return None
+
+            scheduled_play_ns = now_ns
+            actual_play_ns = now_ns
+
+            frame = self.pop_frame(frame_id)
+
+            if not frame:
+                return None
 
             self.next_frame += 1
 
             with self.lock:
                 self.started = True
-                self.playback_start_ns = now_ns
+                self.waiting_for_frame = False
+
+                self.playback_start_ns = actual_play_ns
 
                 self.next_play_ns = (
-                    now_ns
+                    scheduled_play_ns
                     + self.frame_interval_ns
                 )
 
             print(
                 f"[PLAYBACK] START | "
                 f"frame={frame_id} | "
-                f"active={sorted(expected)} | "
-                f"fps={self.fps:.3f}"
+                f"startup_frames={self.startup_frame_count()} | "
+                f"startup_buffer="
+                f"{self.playback_delay_ms:.1f} ms | "
+                f"fps={self.fps:.3f} | "
+                f"active={sorted(expected)}"
             )
 
-            return frame_id, frame
+            return {
+                "frame_id": frame_id,
+                "subpics": frame,
+                "frame_ready_ns": frame_ready_ns,
+                "scheduled_play_ns": scheduled_play_ns,
+                "actual_play_ns": actual_play_ns,
+            }
 
-        # ----------------------------------------------------
+        # ====================================================
         # NORMAL PLAYBACK
-        # ----------------------------------------------------
+        # ====================================================
 
-        # Not yet time to consume the next frame.
         with self.lock:
-            next_play_ns = self.next_play_ns
+            scheduled_play_ns = self.next_play_ns
 
-        if (
-            next_play_ns is not None
-            and now_ns < next_play_ns
-        ):
+        if scheduled_play_ns is None:
             return None
 
-        # ----------------------------------------------------
-        # Playback time has arrived.
-        #
-        # If an ACTIVE SP is missing:
-        #
-        #     WAIT.
-        #
-        # Do NOT:
-        #     - drop the frame
-        #     - advance next_frame
-        #     - create an artificial deadline
-        #
-        # Server will detect this state as STALL.
-        # ----------------------------------------------------
-        if not self.frame_ready(
+        # Not time to play this frame yet.
+        if now_ns < scheduled_play_ns:
+            return None
+
+        frame_ready_ns = self.frame_ready_time_ns(
             frame_id,
             expected
-        ):
-            return None
+        )
 
         # ----------------------------------------------------
-        # All currently active SPs are ready.
-        # Playback can continue.
+        # Playback deadline reached but frame is not ready.
+        #
+        # Buffer does NOT calculate stall here.
+        # It only records that playback is waiting.
         # ----------------------------------------------------
-        frame = self.pop_frame(
-            frame_id
-        )
+
+        if frame_ready_ns is None:
+
+            with self.lock:
+                self.waiting_for_frame = True
+
+            return None
+
+        # ====================================================
+        # Frame is playable
+        # ====================================================
+
+        frame = self.pop_frame(frame_id)
+
+        if not frame:
+            return None
+
+        actual_play_ns = now_ns
 
         self.next_frame += 1
 
-        # ----------------------------------------------------
-        # Resume playback clock from NOW.
-        #
-        # This is important after a stall:
-        #
-        #     stall ends now
-        #          ↓
-        #     next frame is due after 1/FPS
-        #
-        # rather than trying to "catch up" all missed
-        # playback timestamps immediately.
-        # ----------------------------------------------------
         with self.lock:
-            self.next_play_ns = (
-                now_ns
-                + self.frame_interval_ns
-            )
 
-        return frame_id, frame
+            if self.waiting_for_frame:
+
+                # Real playback interruption happened.
+                # Resume playback clock from recovery time.
+                self.next_play_ns = (
+                    actual_play_ns
+                    + self.frame_interval_ns
+                )
+
+            else:
+
+                # Normal playback.
+                # Advance ideal media clock without accumulating
+                # Python polling / scheduling jitter.
+                self.next_play_ns = (
+                    scheduled_play_ns
+                    + self.frame_interval_ns
+                )
+
+            self.waiting_for_frame = False
+
+        return {
+            "frame_id": frame_id,
+            "subpics": frame,
+            "frame_ready_ns": frame_ready_ns,
+            "scheduled_play_ns": scheduled_play_ns,
+            "actual_play_ns": actual_play_ns,
+        }
 
     # ========================================================
-    # Per-stream pending state
+    # Stream lifecycle support
     # ========================================================
 
-    def pending_stream_count(
-        self,
-        stream_id
-    ):
-        """
-        Number of COMPLETE subpicture AUs belonging to
-        stream_id that are still waiting in PlaybackBuffer.
-
-        Used to determine whether a closed QUIC stream can
-        safely flush its PyAV decoder.
-        """
-
+    def pending_stream_count(self, stream_id):
         stream_id = int(stream_id)
         count = 0
 
@@ -487,10 +539,7 @@ class PlaybackBuffer:
                     if not parts:
                         continue
 
-                    if (
-                        self._parts_stream_id(parts)
-                        != stream_id
-                    ):
+                    if self._parts_stream_id(parts) != stream_id:
                         continue
 
                     if self._subpic_complete(parts):
@@ -498,30 +547,13 @@ class PlaybackBuffer:
 
         return count
 
-    def has_pending_stream(
-        self,
-        stream_id
-    ):
-        """
-        True if at least one COMPLETE AU from this stream
-        is still waiting to be fed into PyAV.
-        """
-
+    def has_pending_stream(self, stream_id):
         return (
-            self.pending_stream_count(
-                stream_id
-            ) > 0
+            self.pending_stream_count(stream_id)
+            > 0
         )
 
-    def incomplete_stream_count(
-        self,
-        stream_id
-    ):
-        """
-        Number of incomplete AUs/fragments belonging to
-        this stream that remain in PlaybackBuffer.
-        """
-
+    def incomplete_stream_count(self, stream_id):
         stream_id = int(stream_id)
         count = 0
 
@@ -534,10 +566,7 @@ class PlaybackBuffer:
                     if not parts:
                         continue
 
-                    if (
-                        self._parts_stream_id(parts)
-                        != stream_id
-                    ):
+                    if self._parts_stream_id(parts) != stream_id:
                         continue
 
                     if not self._subpic_complete(parts):
@@ -545,27 +574,14 @@ class PlaybackBuffer:
 
         return count
 
-    def drop_incomplete_stream(
-        self,
-        stream_id
-    ):
-        """
-        Remove incomplete AUs belonging to a CLOSED stream.
-
-        This must only be called after QUIC confirms that the
-        stream is closed, because no additional fragments can
-        arrive after that point.
-        """
-
+    def drop_incomplete_stream(self, stream_id):
         stream_id = int(stream_id)
         removed = 0
 
         with self.lock:
-
             empty_frames = []
 
             for frame_id, frame in self.frames.items():
-
                 remove_subpics = []
 
                 for spid, parts in frame.items():
@@ -573,25 +589,18 @@ class PlaybackBuffer:
                     if not parts:
                         continue
 
-                    if (
-                        self._parts_stream_id(parts)
-                        != stream_id
-                    ):
+                    if self._parts_stream_id(parts) != stream_id:
                         continue
 
                     if not self._subpic_complete(parts):
-                        remove_subpics.append(
-                            spid
-                        )
+                        remove_subpics.append(spid)
 
                 for spid in remove_subpics:
                     del frame[spid]
                     removed += 1
 
                 if not frame:
-                    empty_frames.append(
-                        frame_id
-                    )
+                    empty_frames.append(frame_id)
 
             for frame_id in empty_frames:
                 del self.frames[frame_id]
@@ -599,34 +608,17 @@ class PlaybackBuffer:
         return removed
 
     # ========================================================
-    # Statistics / debug
+    # Debug
     # ========================================================
-
-    def occupancy(self):
-        """
-        Number of frame IDs currently buffered.
-        """
-
-        with self.lock:
-            return len(self.frames)
 
     def missing_subpics(
         self,
         frame_id,
         expected_subpics
     ):
-        """
-        Return currently missing/incomplete ACTIVE SPs for
-        one frame.
-
-        This is for stall/debug statistics only.
-        Missing SPs are NOT automatically dropped.
-        """
-
         expected = set(expected_subpics)
 
         with self.lock:
-
             frame = self.frames.get(
                 int(frame_id),
                 {}
